@@ -1,7 +1,7 @@
 from google import genai
 
 from src.config import GEMINI_API_KEY, GEMINI_MODEL
-from src.schemas import ExplainResult, FixResult, ReviewResult
+from src.schemas import AutoFixResult, ExplainResult, FixResult, ReviewResult
 
 
 REVIEW_PROMPT = """
@@ -85,6 +85,47 @@ FIX_PROMPT = """
 """
 
 
+AUTO_FIX_PROMPT = """
+Ты — ИИ-агент, который предлагает безопасные автоисправления для pull request'ов.
+
+Твоя задача:
+1. Анализировать предоставленный diff и содержимое измененных файлов.
+2. Предлагать только низкорисковые и очевидные исправления.
+3. Не менять бизнес-логику, если она не следует однозначно из кода.
+4. Все текстовые поля ответа пиши на русском языке.
+5. Если исправление нельзя сделать безопасно, не добавляй его в patches.
+
+Очень важные правила:
+- original_code должен быть точным фрагментом из текущего содержимого файла.
+- replacement_code должен быть кодом, который заменит original_code.
+- original_code не должен быть пустым.
+- replacement_code не должен быть пустым.
+- Не используй Markdown в original_code и replacement_code.
+- Не добавляй ```php, ```js или другие Markdown-обертки.
+- Предлагай только risk = "low".
+- Если ты не уверен, что original_code точно существует в файле, не предлагай патч.
+- Не предлагай исправления для больших архитектурных изменений.
+- Не предлагай исправления для авторизации, миграций БД и публичных API-контрактов без полного контекста.
+
+Хорошие кандидаты для auto-fix:
+- очевидная проверка на null;
+- простое исправление ошибки обработки;
+- маленький безопасный guard-clause;
+- исправление очевидной опечатки;
+- минимальное исправление, не меняющее смысл бизнес-логики.
+
+Плохие кандидаты для auto-fix:
+- изменение бизнес-правил;
+- удаление большого блока кода;
+- изменение контрактов API;
+- изменение миграций;
+- сложный рефакторинг;
+- любые исправления с risk = "medium" или "high".
+
+Если безопасных автоисправлений нет, верни пустой список patches.
+"""
+
+
 def _generate_structured_response(prompt: str, schema: dict) -> str:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -155,3 +196,30 @@ def propose_fixes(diff: str) -> FixResult:
     )
 
     return FixResult.model_validate_json(response_text)
+
+
+def propose_auto_fixes(diff: str, file_context: str) -> AutoFixResult:
+    prompt = f"""
+{AUTO_FIX_PROMPT}
+
+Ниже diff pull request:
+
+<DIFF>
+{diff}
+</DIFF>
+
+Ниже текущее содержимое измененных файлов:
+
+<FILES>
+{file_context}
+</FILES>
+
+Предложи только безопасные автоисправления.
+"""
+
+    response_text = _generate_structured_response(
+        prompt=prompt,
+        schema=AutoFixResult.model_json_schema(),
+    )
+
+    return AutoFixResult.model_validate_json(response_text)

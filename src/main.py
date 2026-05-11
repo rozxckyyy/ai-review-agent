@@ -1,15 +1,25 @@
 import argparse
 from pathlib import Path
 
+from src.diff_utils import build_file_context, extract_changed_file_paths
+from src.file_editor import apply_auto_fix_patches
 from src.formatter import (
+    AI_AUTO_FIX_COMMENT_MARKER,
     AI_EXPLAIN_COMMENT_MARKER,
     AI_FIX_COMMENT_MARKER,
     AI_REVIEW_COMMENT_MARKER,
+    format_auto_fix_comment,
     format_explain_comment,
     format_fix_comment,
     format_review_comment,
 )
-from src.gemini_client import explain_diff, propose_fixes, review_diff
+from src.gemini_client import (
+    explain_diff,
+    propose_auto_fixes,
+    propose_fixes,
+    review_diff,
+)
+from src.git_service import commit_and_push_changes
 from src.github_client import get_pull_request_diff, upsert_pull_request_comment
 
 
@@ -54,9 +64,15 @@ def parse_args() -> argparse.Namespace:
     )
     pr_parser.add_argument(
         "--command",
-        choices=["review", "explain", "fix"],
+        choices=["review", "explain", "fix", "auto-fix"],
         default="review",
-        help="Команда агента: review, explain или fix.",
+        help="Команда агента: review, explain, fix или auto-fix.",
+    )
+    pr_parser.add_argument(
+        "--target-dir",
+        type=Path,
+        default=None,
+        help="Путь к checkout репозитория, в котором нужно применять auto-fix.",
     )
 
     return parser.parse_args()
@@ -150,6 +166,72 @@ def run_fix_command(
     print("Комментарий с предложениями исправлений опубликован или обновлен в pull request.")
 
 
+def run_auto_fix_command(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    diff: str,
+    publish: bool,
+    target_dir: Path | None,
+) -> None:
+    if target_dir is None:
+        raise RuntimeError(
+            "Для команды auto-fix необходимо передать --target-dir."
+        )
+
+    if not target_dir.exists():
+        raise FileNotFoundError(f"target-dir не найден: {target_dir}")
+
+    changed_files = extract_changed_file_paths(diff)
+    file_context = build_file_context(
+        target_dir=target_dir,
+        file_paths=changed_files,
+    )
+
+    auto_fixes = propose_auto_fixes(
+        diff=diff,
+        file_context=file_context,
+    )
+
+    applied, failed = apply_auto_fix_patches(
+        target_dir=target_dir,
+        patches=auto_fixes.patches,
+    )
+
+    commit_created = False
+
+    if applied:
+        commit_created = commit_and_push_changes(
+            target_dir=target_dir,
+            message="Apply AI auto-fix suggestions",
+        )
+
+    print(auto_fixes.model_dump_json(indent=2))
+    print(f"Applied fixes: {len(applied)}")
+    print(f"Failed fixes: {len(failed)}")
+    print(f"Commit created: {commit_created}")
+
+    if not publish:
+        return
+
+    comment = format_auto_fix_comment(
+        result=auto_fixes,
+        applied=applied,
+        failed=failed,
+        commit_created=commit_created,
+    )
+
+    upsert_pull_request_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=comment,
+        marker=AI_AUTO_FIX_COMMENT_MARKER,
+    )
+
+    print("Комментарий auto-fix опубликован или обновлен в pull request.")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -194,6 +276,17 @@ def main() -> None:
                 pull_number=args.pull_number,
                 diff=diff,
                 publish=args.publish,
+            )
+            return
+
+        if args.command == "auto-fix":
+            run_auto_fix_command(
+                owner=args.owner,
+                repo=args.repo,
+                pull_number=args.pull_number,
+                diff=diff,
+                publish=args.publish,
+                target_dir=args.target_dir,
             )
             return
 

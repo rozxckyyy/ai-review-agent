@@ -76,3 +76,30 @@ class FixResult(BaseModel):
     fixes: list[FixSuggestion] = Field(
         description="Список предложенных исправлений."
     )
+
+
+class AutoFixPatch(BaseModel):
+    title: str = Field(description="Короткий заголовок автоисправления.")
+    file: str = Field(description="Файл, который нужно изменить.")
+    original_code: str = Field(
+        description="Точный фрагмент текущего кода, который нужно заменить."
+    )
+    replacement_code: str = Field(
+        description="Код, на который нужно заменить original_code."
+    )
+    explanation: str = Field(description="Почему это исправление безопасно.")
+    confidence: float = Field(
+        ge=0,
+        le=1,
+        description="Уверенность модели в исправлении от 0 до 1.",
+    )
+    risk: Literal["low", "medium", "high"] = Field(
+        description="Оценка риска исправления."
+    )
+
+
+class AutoFixResult(BaseModel):
+    summary: str = Field(description="Краткий итог автоисправлений.")
+    patches: list[AutoFixPatch] = Field(
+        description="Список патчей, которые можно попробовать применить."
+    )

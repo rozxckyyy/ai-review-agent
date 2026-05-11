@@ -1,9 +1,10 @@
-from src.schemas import ExplainResult, FixResult, ReviewResult
+from src.schemas import AutoFixResult, ExplainResult, FixResult, ReviewResult
 
 
 AI_REVIEW_COMMENT_MARKER = "<!-- ai-review-agent-review-comment -->"
 AI_EXPLAIN_COMMENT_MARKER = "<!-- ai-review-agent-explain-comment -->"
 AI_FIX_COMMENT_MARKER = "<!-- ai-review-agent-fix-comment -->"
+AI_AUTO_FIX_COMMENT_MARKER = "<!-- ai-review-agent-auto-fix-comment -->"
 
 
 def format_review_comment(review: ReviewResult) -> str:
@@ -143,5 +144,69 @@ def format_fix_comment(result: FixResult) -> str:
             "Это только предложение исправления. Агент пока не изменяет код автоматически.",
         ]
     )
+
+    return "\n".join(lines)
+
+
+def format_auto_fix_comment(
+    result: AutoFixResult,
+    applied: list,
+    failed: list,
+    commit_created: bool,
+) -> str:
+    lines: list[str] = [
+        AI_AUTO_FIX_COMMENT_MARKER,
+        "## 🤖 AI Review Agent — Auto Fix",
+        "",
+        f"**Summary:** {result.summary}",
+        "",
+    ]
+
+    if not result.patches:
+        lines.append("Агент не нашел безопасных автоисправлений.")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            f"**Предложено патчей:** {len(result.patches)}",
+            f"**Применено:** {len(applied)}",
+            f"**Не применено:** {len(failed)}",
+            "",
+        ]
+    )
+
+    if applied:
+        lines.append("### ✅ Applied fixes")
+        lines.append("")
+
+        for item in applied:
+            lines.extend(
+                [
+                    f"- `{item.file}` — {item.title}",
+                ]
+            )
+
+        lines.append("")
+
+    if failed:
+        lines.append("### ⚠️ Skipped fixes")
+        lines.append("")
+
+        for item in failed:
+            lines.extend(
+                [
+                    f"- `{item.file}` — {item.title}",
+                    f"  - Причина: {item.reason}",
+                ]
+            )
+
+        lines.append("")
+
+    if commit_created:
+        lines.append("✅ Изменения применены и запушены в ветку pull request.")
+    elif applied:
+        lines.append("⚠️ Исправления были применены локально, но commit не был создан.")
+    else:
+        lines.append("Код не был изменен.")
 
     return "\n".join(lines)
