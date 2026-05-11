@@ -6,7 +6,12 @@ from src.check_runner import (
     format_check_results_for_prompt,
     run_project_checks,
 )
-from src.diff_utils import build_file_context, extract_changed_file_paths
+from src.diff_utils import (
+    build_file_context,
+    collect_context_file_paths,
+    extract_changed_file_paths,
+    merge_unique_file_paths,
+)
 from src.file_editor import apply_auto_fix_patches
 from src.formatter import (
     AI_AUTO_FIX_COMMENT_MARKER,
@@ -52,19 +57,9 @@ def parse_args() -> argparse.Namespace:
         "pr",
         help="Проанализировать diff pull request из GitHub.",
     )
-    pr_parser.add_argument(
-        "owner",
-        help="Владелец репозитория на GitHub.",
-    )
-    pr_parser.add_argument(
-        "repo",
-        help="Название репозитория.",
-    )
-    pr_parser.add_argument(
-        "pull_number",
-        type=int,
-        help="Номер pull request.",
-    )
+    pr_parser.add_argument("owner", help="Владелец репозитория на GitHub.")
+    pr_parser.add_argument("repo", help="Название репозитория.")
+    pr_parser.add_argument("pull_number", type=int, help="Номер pull request.")
     pr_parser.add_argument(
         "--publish",
         action="store_true",
@@ -118,6 +113,39 @@ def collect_project_checks(target_dir: Path | None):
     return results, format_check_results_for_prompt(results)
 
 
+def collect_project_file_context(
+    target_dir: Path | None,
+    diff: str,
+) -> str:
+    if target_dir is None:
+        return "Дополнительный контекст файлов не собран: --target-dir не передан."
+
+    if not target_dir.exists():
+        return f"Дополнительный контекст файлов не собран: target-dir не найден: {target_dir}"
+
+    config = load_agent_config(target_dir)
+
+    changed_files = extract_changed_file_paths(diff)
+
+    included_files = collect_context_file_paths(
+        target_dir=target_dir,
+        include_patterns=config.context.include,
+        exclude_patterns=config.context.exclude,
+        max_files=config.context.max_files,
+    )
+
+    context_files = merge_unique_file_paths(
+        changed_files,
+        included_files,
+    )
+
+    return build_file_context(
+        target_dir=target_dir,
+        file_paths=context_files,
+        max_chars_per_file=config.context.max_chars_per_file,
+    )
+
+
 def run_review_command(
     owner: str,
     repo: str,
@@ -128,10 +156,12 @@ def run_review_command(
     fail_on_request_changes: bool,
 ) -> None:
     check_results, checks_context = collect_project_checks(target_dir)
+    file_context = collect_project_file_context(target_dir, diff)
 
     review = review_diff(
         diff=diff,
         checks_context=checks_context,
+        file_context=file_context,
     )
 
     print(review.model_dump_json(indent=2))
@@ -165,10 +195,12 @@ def run_explain_command(
     target_dir: Path | None,
 ) -> None:
     _, checks_context = collect_project_checks(target_dir)
+    file_context = collect_project_file_context(target_dir, diff)
 
     explanation = explain_diff(
         diff=diff,
         checks_context=checks_context,
+        file_context=file_context,
     )
 
     print(explanation.model_dump_json(indent=2))
@@ -198,10 +230,12 @@ def run_fix_command(
     target_dir: Path | None,
 ) -> None:
     _, checks_context = collect_project_checks(target_dir)
+    file_context = collect_project_file_context(target_dir, diff)
 
     fixes = propose_fixes(
         diff=diff,
         checks_context=checks_context,
+        file_context=file_context,
     )
 
     print(fixes.model_dump_json(indent=2))
@@ -236,15 +270,13 @@ def run_auto_fix_command(
     if not target_dir.exists():
         raise FileNotFoundError(f"target-dir не найден: {target_dir}")
 
-    changed_files = extract_changed_file_paths(diff)
-    file_context = build_file_context(
-        target_dir=target_dir,
-        file_paths=changed_files,
-    )
+    _, checks_context = collect_project_checks(target_dir)
+    file_context = collect_project_file_context(target_dir, diff)
 
     auto_fixes = propose_auto_fixes(
         diff=diff,
         file_context=file_context,
+        checks_context=checks_context,
     )
 
     applied, failed = apply_auto_fix_patches(
