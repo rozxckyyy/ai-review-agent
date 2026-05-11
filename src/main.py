@@ -52,9 +52,19 @@ def parse_args() -> argparse.Namespace:
         "pr",
         help="Проанализировать diff pull request из GitHub.",
     )
-    pr_parser.add_argument("owner", help="Владелец репозитория на GitHub.")
-    pr_parser.add_argument("repo", help="Название репозитория.")
-    pr_parser.add_argument("pull_number", type=int, help="Номер pull request.")
+    pr_parser.add_argument(
+        "owner",
+        help="Владелец репозитория на GitHub.",
+    )
+    pr_parser.add_argument(
+        "repo",
+        help="Название репозитория.",
+    )
+    pr_parser.add_argument(
+        "pull_number",
+        type=int,
+        help="Номер pull request.",
+    )
     pr_parser.add_argument(
         "--publish",
         action="store_true",
@@ -71,6 +81,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Путь к checkout репозитория.",
+    )
+    pr_parser.add_argument(
+        "--fail-on-request-changes",
+        action="store_true",
+        help="Завершить процесс с ошибкой, если review verdict = request_changes.",
     )
 
     return parser.parse_args()
@@ -110,6 +125,7 @@ def run_review_command(
     diff: str,
     publish: bool,
     target_dir: Path | None,
+    fail_on_request_changes: bool,
 ) -> None:
     check_results, checks_context = collect_project_checks(target_dir)
 
@@ -120,23 +136,24 @@ def run_review_command(
 
     print(review.model_dump_json(indent=2))
 
-    if not publish:
-        return
+    if publish:
+        comment = format_review_comment(
+            review=review,
+            check_results=check_results,
+        )
 
-    comment = format_review_comment(
-        review=review,
-        check_results=check_results,
-    )
+        upsert_pull_request_comment(
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=comment,
+            marker=AI_REVIEW_COMMENT_MARKER,
+        )
 
-    upsert_pull_request_comment(
-        owner=owner,
-        repo=repo,
-        pull_number=pull_number,
-        body=comment,
-        marker=AI_REVIEW_COMMENT_MARKER,
-    )
+        print("Комментарий ревью опубликован или обновлен в pull request.")
 
-    print("Комментарий ревью опубликован или обновлен в pull request.")
+    if fail_on_request_changes and review.verdict == "request_changes":
+        raise SystemExit(1)
 
 
 def run_explain_command(
@@ -355,6 +372,7 @@ def main() -> None:
                 diff=diff,
                 publish=args.publish,
                 target_dir=args.target_dir,
+                fail_on_request_changes=args.fail_on_request_changes,
             )
             return
 
