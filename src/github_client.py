@@ -94,3 +94,77 @@ def create_pull_request_comment(
     )
 
     _handle_github_error(response)
+
+def list_pull_request_comments(
+    owner: str,
+    repo: str,
+    pull_number: int,
+) -> list[dict]:
+    url = (
+        f"{GITHUB_API_BASE_URL}/repos/{owner}/{repo}"
+        f"/issues/{pull_number}/comments"
+    )
+
+    response = requests.get(
+        url,
+        headers=_build_headers(),
+        timeout=30,
+    )
+
+    _handle_github_error(response)
+
+    return response.json()
+
+
+def update_pull_request_comment(
+    owner: str,
+    repo: str,
+    comment_id: int,
+    body: str,
+) -> None:
+    url = (
+        f"{GITHUB_API_BASE_URL}/repos/{owner}/{repo}"
+        f"/issues/comments/{comment_id}"
+    )
+
+    response = requests.patch(
+        url,
+        headers=_build_headers(),
+        json={"body": body},
+        timeout=30,
+    )
+
+    _handle_github_error(response)
+
+
+def upsert_pull_request_comment(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    body: str,
+    marker: str,
+) -> None:
+    comments = list_pull_request_comments(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+    )
+
+    for comment in comments:
+        comment_body = comment.get("body") or ""
+
+        if marker in comment_body:
+            update_pull_request_comment(
+                owner=owner,
+                repo=repo,
+                comment_id=comment["id"],
+                body=body,
+            )
+            return
+
+    create_pull_request_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=body,
+    )

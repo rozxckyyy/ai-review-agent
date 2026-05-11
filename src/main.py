@@ -1,11 +1,11 @@
 import argparse
 from pathlib import Path
 
-from src.formatter import format_review_comment
+from src.formatter import AI_REVIEW_COMMENT_MARKER, format_review_comment
 from src.gemini_client import review_diff
 from src.github_client import (
-    create_pull_request_comment,
     get_pull_request_diff,
+    upsert_pull_request_comment,
 )
 
 
@@ -70,13 +70,14 @@ def main() -> None:
 
         if args.publish:
             comment = format_review_comment(review)
-            create_pull_request_comment(
+            upsert_pull_request_comment(
                 owner=args.owner,
                 repo=args.repo,
                 pull_number=args.pull_number,
                 body=comment,
+                marker=AI_REVIEW_COMMENT_MARKER,
             )
-            print("Комментарий опубликован в pull request.")
+            print("Комментарий опубликован или обновлен в pull request.")
 
         return
 

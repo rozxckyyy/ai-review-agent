@@ -1,6 +1,9 @@
 from src.schemas import ReviewResult
 
 
+AI_REVIEW_COMMENT_MARKER = "<!-- ai-review-agent-comment -->"
+
+
 def format_review_comment(review: ReviewResult) -> str:
     verdict_label = {
         "approve": "✅ Approve",
@@ -9,6 +12,7 @@ def format_review_comment(review: ReviewResult) -> str:
     }[review.verdict]
 
     lines: list[str] = [
+        AI_REVIEW_COMMENT_MARKER,
         "## 🤖 AI Review Agent",
         "",
         f"**Verdict:** {verdict_label}",
