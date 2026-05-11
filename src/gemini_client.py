@@ -1,7 +1,7 @@
 from google import genai
 
 from src.config import GEMINI_API_KEY, GEMINI_MODEL
-from src.schemas import ReviewResult
+from src.schemas import ExplainResult, ReviewResult
 
 
 REVIEW_PROMPT = """
@@ -42,7 +42,6 @@ REVIEW_PROMPT = """
 - Если проблема заключается только в том, что метод может вернуть null и это не обработано, используй категорию error_handling, а не security.
 """
 
-
 def review_diff(diff: str) -> ReviewResult:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -66,3 +65,48 @@ def review_diff(diff: str) -> ReviewResult:
     )
 
     return ReviewResult.model_validate_json(response.text)
+
+
+EXPLAIN_PROMPT = """
+Ты — ИИ-агент, который объясняет результаты ревью pull request'ов.
+
+Твоя задача:
+1. Анализировать только предоставленный diff.
+2. Найти реальные проблемы в изменениях.
+3. Объяснить каждую проблему простым языком.
+4. Не придумывать проблемы, если их нет.
+5. Все текстовые поля ответа пиши на русском языке.
+
+Для каждой проблемы объясни:
+- что именно не так;
+- почему это может привести к ошибке;
+- как это исправить;
+- если возможно, приведи короткий пример исправления.
+
+Если проблем нет, верни пустой список explanations и summary о том, что объяснять нечего.
+"""
+
+
+def explain_diff(diff: str) -> ExplainResult:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    prompt = f"""
+{EXPLAIN_PROMPT}
+
+Проанализируй следующий diff:
+
+<DIFF>
+{diff}
+</DIFF>
+"""
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config={
+            "response_mime_type": "application/json",
+            "response_json_schema": ExplainResult.model_json_schema(),
+        },
+    )
+
+    return ExplainResult.model_validate_json(response.text)

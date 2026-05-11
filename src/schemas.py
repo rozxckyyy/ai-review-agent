@@ -35,3 +35,21 @@ class ReviewResult(BaseModel):
     findings: list[Finding] = Field(
         description="Список найденных замечаний."
     )
+
+class FindingExplanation(BaseModel):
+    title: str = Field(description="Короткий заголовок объясняемой проблемы.")
+    file: str = Field(description="Файл, к которому относится проблема.")
+    line: int = Field(description="Строка, к которой относится проблема.")
+    plain_explanation: str = Field(description="Простое объяснение проблемы.")
+    why_it_matters: str = Field(description="Почему это важно.")
+    how_to_fix: str = Field(description="Как можно исправить проблему.")
+    example_fix: str = Field(
+        description="Краткий пример исправления. Если пример не нужен, верни пустую строку."
+    )
+
+
+class ExplainResult(BaseModel):
+    summary: str = Field(description="Краткий итог объяснения.")
+    explanations: list[FindingExplanation] = Field(
+        description="Подробные объяснения найденных проблем."
+    )

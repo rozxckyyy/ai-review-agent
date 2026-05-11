@@ -1,12 +1,14 @@
 import argparse
 from pathlib import Path
 
-from src.formatter import AI_REVIEW_COMMENT_MARKER, format_review_comment
-from src.gemini_client import review_diff
-from src.github_client import (
-    get_pull_request_diff,
-    upsert_pull_request_comment,
+from src.formatter import (
+    AI_EXPLAIN_COMMENT_MARKER,
+    AI_REVIEW_COMMENT_MARKER,
+    format_explain_comment,
+    format_review_comment,
 )
+from src.gemini_client import explain_diff, review_diff
+from src.github_client import get_pull_request_diff, upsert_pull_request_comment
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,13 +32,29 @@ def parse_args() -> argparse.Namespace:
         "pr",
         help="Проанализировать diff pull request из GitHub.",
     )
-    pr_parser.add_argument("owner", help="Владелец репозитория на GitHub.")
-    pr_parser.add_argument("repo", help="Название репозитория.")
-    pr_parser.add_argument("pull_number", type=int, help="Номер pull request.")
+    pr_parser.add_argument(
+        "owner",
+        help="Владелец репозитория на GitHub.",
+    )
+    pr_parser.add_argument(
+        "repo",
+        help="Название репозитория.",
+    )
+    pr_parser.add_argument(
+        "pull_number",
+        type=int,
+        help="Номер pull request.",
+    )
     pr_parser.add_argument(
         "--publish",
         action="store_true",
-        help="Опубликовать результат ревью комментарием в pull request.",
+        help="Опубликовать результат в pull request.",
+    )
+    pr_parser.add_argument(
+        "--command",
+        choices=["review", "explain"],
+        default="review",
+        help="Команда агента: review или explain.",
     )
 
     return parser.parse_args()
@@ -49,12 +67,67 @@ def read_diff_from_file(diff_file: Path) -> str:
     return diff_file.read_text(encoding="utf-8")
 
 
+def run_review_command(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    diff: str,
+    publish: bool,
+) -> None:
+    review = review_diff(diff)
+
+    print(review.model_dump_json(indent=2))
+
+    if not publish:
+        return
+
+    comment = format_review_comment(review)
+
+    upsert_pull_request_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=comment,
+        marker=AI_REVIEW_COMMENT_MARKER,
+    )
+
+    print("Комментарий ревью опубликован или обновлен в pull request.")
+
+
+def run_explain_command(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    diff: str,
+    publish: bool,
+) -> None:
+    explanation = explain_diff(diff)
+
+    print(explanation.model_dump_json(indent=2))
+
+    if not publish:
+        return
+
+    comment = format_explain_comment(explanation)
+
+    upsert_pull_request_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=comment,
+        marker=AI_EXPLAIN_COMMENT_MARKER,
+    )
+
+    print("Комментарий с объяснением опубликован или обновлен в pull request.")
+
+
 def main() -> None:
     args = parse_args()
 
     if args.mode == "file":
         diff = read_diff_from_file(args.diff_file)
         review = review_diff(diff)
+
         print(review.model_dump_json(indent=2))
         return
 
@@ -65,21 +138,27 @@ def main() -> None:
             pull_number=args.pull_number,
         )
 
-        review = review_diff(diff)
-        print(review.model_dump_json(indent=2))
-
-        if args.publish:
-            comment = format_review_comment(review)
-            upsert_pull_request_comment(
+        if args.command == "review":
+            run_review_command(
                 owner=args.owner,
                 repo=args.repo,
                 pull_number=args.pull_number,
-                body=comment,
-                marker=AI_REVIEW_COMMENT_MARKER,
+                diff=diff,
+                publish=args.publish,
             )
-            print("Комментарий опубликован или обновлен в pull request.")
+            return
 
-        return
+        if args.command == "explain":
+            run_explain_command(
+                owner=args.owner,
+                repo=args.repo,
+                pull_number=args.pull_number,
+                diff=diff,
+                publish=args.publish,
+            )
+            return
+
+        raise RuntimeError(f"Неизвестная команда агента: {args.command}")
 
     raise RuntimeError(f"Неизвестный режим запуска: {args.mode}")
 
