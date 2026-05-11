@@ -91,6 +91,18 @@ def collect_context_file_paths(
     return paths
 
 
+def _add_line_numbers(content: str) -> str:
+    lines = content.splitlines()
+
+    if not lines:
+        return "1 | "
+
+    return "\n".join(
+        f"{index} | {line}"
+        for index, line in enumerate(lines, start=1)
+    )
+
+
 def build_file_context(
     target_dir: Path,
     file_paths: list[str],
@@ -113,8 +125,18 @@ def build_file_context(
             content = content[:max_chars_per_file]
             content += "\n\n/* Файл обрезан из-за большого размера */"
 
+        numbered_content = _add_line_numbers(content)
+
         parts.append(
-            f'<FILE path="{file_path}">\n{content}\n</FILE>'
+            "\n".join(
+                [
+                    f'<FILE path="{file_path}">',
+                    "<CONTENT_WITH_LINE_NUMBERS>",
+                    numbered_content,
+                    "</CONTENT_WITH_LINE_NUMBERS>",
+                    "</FILE>",
+                ]
+            )
         )
 
     if not parts:
