@@ -312,27 +312,28 @@ def run_auto_fix_command(
     print(f"Checks passed: {checks_passed}")
     print(f"Commit created: {commit_created}")
 
-    if not publish:
-        return
+    if publish:
+        comment = format_auto_fix_comment(
+            result=auto_fixes,
+            applied=applied,
+            failed=failed,
+            commit_created=commit_created,
+            check_results=post_check_results,
+            checks_passed=checks_passed,
+        )
 
-    comment = format_auto_fix_comment(
-        result=auto_fixes,
-        applied=applied,
-        failed=failed,
-        commit_created=commit_created,
-        check_results=post_check_results,
-        checks_passed=checks_passed,
-    )
+        upsert_pull_request_comment(
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=comment,
+            marker=AI_AUTO_FIX_COMMENT_MARKER,
+        )
 
-    upsert_pull_request_comment(
-        owner=owner,
-        repo=repo,
-        pull_number=pull_number,
-        body=comment,
-        marker=AI_AUTO_FIX_COMMENT_MARKER,
-    )
+        print("Комментарий auto-fix опубликован или обновлен в pull request.")
 
-    print("Комментарий auto-fix опубликован или обновлен в pull request.")
+    if applied and checks_passed is False:
+        raise SystemExit(1)
 
 
 def run_revert_last_fix_command(
