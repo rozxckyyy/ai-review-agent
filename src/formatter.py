@@ -1,3 +1,4 @@
+from src.check_runner import CheckResult
 from src.schemas import AutoFixResult, ExplainResult, FixResult, ReviewResult
 
 
@@ -8,7 +9,65 @@ AI_AUTO_FIX_COMMENT_MARKER = "<!-- ai-review-agent-auto-fix-comment -->"
 AI_REVERT_COMMENT_MARKER = "<!-- ai-review-agent-revert-comment -->"
 
 
-def format_review_comment(review: ReviewResult) -> str:
+def _format_checks_markdown(check_results: list[CheckResult]) -> list[str]:
+    if not check_results:
+        return [
+            "### Instrumental checks",
+            "",
+            "Инструментальные проверки не настроены или не запускались.",
+            "",
+        ]
+
+    lines: list[str] = [
+        "### Instrumental checks",
+        "",
+    ]
+
+    for check in check_results:
+        icon = "✅" if check.status == "passed" else "❌"
+
+        lines.extend(
+            [
+                f"#### {icon} {check.name}",
+                "",
+                f"- **Статус:** `{check.status}`",
+                f"- **Команда:** `{check.command}`",
+                f"- **Exit code:** `{check.exit_code}`",
+                "",
+            ]
+        )
+
+        if check.stderr.strip():
+            lines.extend(
+                [
+                    "**stderr:**",
+                    "",
+                    "```",
+                    check.stderr.strip(),
+                    "```",
+                    "",
+                ]
+            )
+
+        if check.stdout.strip() and check.status != "passed":
+            lines.extend(
+                [
+                    "**stdout:**",
+                    "",
+                    "```",
+                    check.stdout.strip(),
+                    "```",
+                    "",
+                ]
+            )
+
+    return lines
+
+
+def format_review_comment(
+    review: ReviewResult,
+    check_results: list[CheckResult] | None = None,
+) -> str:
     verdict_label = {
         "approve": "✅ Approve",
         "comment": "💬 Comment",
@@ -24,6 +83,8 @@ def format_review_comment(review: ReviewResult) -> str:
         f"**Summary:** {review.summary}",
         "",
     ]
+
+    lines.extend(_format_checks_markdown(check_results or []))
 
     if not review.findings:
         lines.append("Замечаний не найдено.")
@@ -154,6 +215,8 @@ def format_auto_fix_comment(
     applied: list,
     failed: list,
     commit_created: bool,
+    check_results: list[CheckResult] | None = None,
+    checks_passed: bool | None = None,
 ) -> str:
     lines: list[str] = [
         AI_AUTO_FIX_COMMENT_MARKER,
@@ -199,8 +262,13 @@ def format_auto_fix_comment(
 
         lines.append("")
 
-    if commit_created:
-        lines.append("✅ Изменения применены и запушены в ветку pull request.")
+    if check_results is not None:
+        lines.extend(_format_checks_markdown(check_results))
+
+    if checks_passed is False:
+        lines.append("❌ Проверки не прошли, поэтому commit не был создан.")
+    elif commit_created:
+        lines.append("✅ Изменения применены, проверки пройдены и commit запушен в ветку pull request.")
     elif applied:
         lines.append("⚠️ Исправления были применены локально, но commit не был создан.")
     else:

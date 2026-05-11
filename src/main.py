@@ -1,6 +1,11 @@
 import argparse
 from pathlib import Path
 
+from src.check_runner import (
+    all_checks_passed,
+    format_check_results_for_prompt,
+    run_project_checks,
+)
 from src.diff_utils import build_file_context, extract_changed_file_paths
 from src.file_editor import apply_auto_fix_patches
 from src.formatter import (
@@ -23,6 +28,7 @@ from src.gemini_client import (
 )
 from src.git_service import commit_and_push_changes, revert_last_auto_fix_commit
 from src.github_client import get_pull_request_diff, upsert_pull_request_comment
+from src.project_config import load_agent_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,19 +52,9 @@ def parse_args() -> argparse.Namespace:
         "pr",
         help="Проанализировать diff pull request из GitHub.",
     )
-    pr_parser.add_argument(
-        "owner",
-        help="Владелец репозитория на GitHub.",
-    )
-    pr_parser.add_argument(
-        "repo",
-        help="Название репозитория.",
-    )
-    pr_parser.add_argument(
-        "pull_number",
-        type=int,
-        help="Номер pull request.",
-    )
+    pr_parser.add_argument("owner", help="Владелец репозитория на GitHub.")
+    pr_parser.add_argument("repo", help="Название репозитория.")
+    pr_parser.add_argument("pull_number", type=int, help="Номер pull request.")
     pr_parser.add_argument(
         "--publish",
         action="store_true",
@@ -74,7 +70,7 @@ def parse_args() -> argparse.Namespace:
         "--target-dir",
         type=Path,
         default=None,
-        help="Путь к checkout репозитория, в котором нужно применять auto-fix или revert.",
+        help="Путь к checkout репозитория.",
     )
 
     return parser.parse_args()
@@ -87,21 +83,50 @@ def read_diff_from_file(diff_file: Path) -> str:
     return diff_file.read_text(encoding="utf-8")
 
 
+def collect_project_checks(target_dir: Path | None):
+    if target_dir is None:
+        return [], "Инструментальные проверки не запускались: --target-dir не передан."
+
+    if not target_dir.exists():
+        return [], f"Инструментальные проверки не запускались: target-dir не найден: {target_dir}"
+
+    config = load_agent_config(target_dir)
+
+    if not config.checks:
+        return [], "Инструментальные проверки не настроены: файл .ai-agent.yml не найден или checks пуст."
+
+    results = run_project_checks(
+        target_dir=target_dir,
+        checks=config.checks,
+    )
+
+    return results, format_check_results_for_prompt(results)
+
+
 def run_review_command(
     owner: str,
     repo: str,
     pull_number: int,
     diff: str,
     publish: bool,
+    target_dir: Path | None,
 ) -> None:
-    review = review_diff(diff)
+    check_results, checks_context = collect_project_checks(target_dir)
+
+    review = review_diff(
+        diff=diff,
+        checks_context=checks_context,
+    )
 
     print(review.model_dump_json(indent=2))
 
     if not publish:
         return
 
-    comment = format_review_comment(review)
+    comment = format_review_comment(
+        review=review,
+        check_results=check_results,
+    )
 
     upsert_pull_request_comment(
         owner=owner,
@@ -120,8 +145,14 @@ def run_explain_command(
     pull_number: int,
     diff: str,
     publish: bool,
+    target_dir: Path | None,
 ) -> None:
-    explanation = explain_diff(diff)
+    _, checks_context = collect_project_checks(target_dir)
+
+    explanation = explain_diff(
+        diff=diff,
+        checks_context=checks_context,
+    )
 
     print(explanation.model_dump_json(indent=2))
 
@@ -147,8 +178,14 @@ def run_fix_command(
     pull_number: int,
     diff: str,
     publish: bool,
+    target_dir: Path | None,
 ) -> None:
-    fixes = propose_fixes(diff)
+    _, checks_context = collect_project_checks(target_dir)
+
+    fixes = propose_fixes(
+        diff=diff,
+        checks_context=checks_context,
+    )
 
     print(fixes.model_dump_json(indent=2))
 
@@ -177,9 +214,7 @@ def run_auto_fix_command(
     target_dir: Path | None,
 ) -> None:
     if target_dir is None:
-        raise RuntimeError(
-            "Для команды auto-fix необходимо передать --target-dir."
-        )
+        raise RuntimeError("Для команды auto-fix необходимо передать --target-dir.")
 
     if not target_dir.exists():
         raise FileNotFoundError(f"target-dir не найден: {target_dir}")
@@ -200,17 +235,32 @@ def run_auto_fix_command(
         patches=auto_fixes.patches,
     )
 
+    post_check_results = []
+    checks_passed: bool | None = None
     commit_created = False
 
     if applied:
-        commit_created = commit_and_push_changes(
-            target_dir=target_dir,
-            message="Apply AI auto-fix suggestions",
-        )
+        config = load_agent_config(target_dir)
+
+        if config.checks:
+            post_check_results = run_project_checks(
+                target_dir=target_dir,
+                checks=config.checks,
+            )
+            checks_passed = all_checks_passed(post_check_results)
+        else:
+            checks_passed = True
+
+        if checks_passed:
+            commit_created = commit_and_push_changes(
+                target_dir=target_dir,
+                message="Apply AI auto-fix suggestions",
+            )
 
     print(auto_fixes.model_dump_json(indent=2))
     print(f"Applied fixes: {len(applied)}")
     print(f"Failed fixes: {len(failed)}")
+    print(f"Checks passed: {checks_passed}")
     print(f"Commit created: {commit_created}")
 
     if not publish:
@@ -221,6 +271,8 @@ def run_auto_fix_command(
         applied=applied,
         failed=failed,
         commit_created=commit_created,
+        check_results=post_check_results,
+        checks_passed=checks_passed,
     )
 
     upsert_pull_request_comment(
@@ -242,9 +294,7 @@ def run_revert_last_fix_command(
     target_dir: Path | None,
 ) -> None:
     if target_dir is None:
-        raise RuntimeError(
-            "Для команды revert-last-fix необходимо передать --target-dir."
-        )
+        raise RuntimeError("Для команды revert-last-fix необходимо передать --target-dir.")
 
     if not target_dir.exists():
         raise FileNotFoundError(f"target-dir не найден: {target_dir}")
@@ -304,6 +354,7 @@ def main() -> None:
                 pull_number=args.pull_number,
                 diff=diff,
                 publish=args.publish,
+                target_dir=args.target_dir,
             )
             return
 
@@ -314,6 +365,7 @@ def main() -> None:
                 pull_number=args.pull_number,
                 diff=diff,
                 publish=args.publish,
+                target_dir=args.target_dir,
             )
             return
 
@@ -324,6 +376,7 @@ def main() -> None:
                 pull_number=args.pull_number,
                 diff=diff,
                 publish=args.publish,
+                target_dir=args.target_dir,
             )
             return
 
