@@ -2,20 +2,31 @@ import subprocess
 from pathlib import Path
 
 
+AUTO_FIX_COMMIT_MESSAGE = "Apply AI auto-fix suggestions"
+AI_AGENT_AUTHOR_NAME = "AI Review Agent"
+
+
 def _run_git(target_dir: Path, args: list[str]) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=target_dir,
         text=True,
         capture_output=True,
-        check=True,
     )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Ошибка выполнения git-команды:\n"
+            f"git {' '.join(args)}\n\n"
+            f"STDOUT:\n{result.stdout}\n\n"
+            f"STDERR:\n{result.stderr}"
+        )
 
     return result.stdout.strip()
 
 
 def configure_git_author(target_dir: Path) -> None:
-    _run_git(target_dir, ["config", "user.name", "AI Review Agent"])
+    _run_git(target_dir, ["config", "user.name", AI_AGENT_AUTHOR_NAME])
     _run_git(
         target_dir,
         ["config", "user.email", "github-actions[bot]@users.noreply.github.com"],
@@ -27,6 +38,20 @@ def has_git_changes(target_dir: Path) -> bool:
     return bool(status.strip())
 
 
+def get_current_branch(target_dir: Path) -> str:
+    branch = _run_git(target_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+
+    if not branch or branch == "HEAD":
+        raise RuntimeError("Не удалось определить текущую ветку для push.")
+
+    return branch
+
+
+def push_current_branch(target_dir: Path) -> None:
+    branch = get_current_branch(target_dir)
+    _run_git(target_dir, ["push", "origin", f"HEAD:{branch}"])
+
+
 def commit_and_push_changes(target_dir: Path, message: str) -> bool:
     configure_git_author(target_dir)
 
@@ -35,12 +60,47 @@ def commit_and_push_changes(target_dir: Path, message: str) -> bool:
 
     _run_git(target_dir, ["add", "."])
     _run_git(target_dir, ["commit", "-m", message])
-
-    branch = _run_git(target_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
-
-    if branch and branch != "HEAD":
-        _run_git(target_dir, ["push", "origin", f"HEAD:{branch}"])
-    else:
-        _run_git(target_dir, ["push"])
+    push_current_branch(target_dir)
 
     return True
+
+
+def find_last_auto_fix_commit(target_dir: Path, max_count: int = 30) -> str | None:
+    log_output = _run_git(
+        target_dir,
+        [
+            "log",
+            f"--max-count={max_count}",
+            "--format=%H%x1f%an%x1f%s",
+        ],
+    )
+
+    if not log_output.strip():
+        return None
+
+    for line in log_output.splitlines():
+        parts = line.split("\x1f")
+
+        if len(parts) != 3:
+            continue
+
+        commit_hash, author_name, subject = parts
+
+        if author_name == AI_AGENT_AUTHOR_NAME and subject == AUTO_FIX_COMMIT_MESSAGE:
+            return commit_hash
+
+    return None
+
+
+def revert_last_auto_fix_commit(target_dir: Path) -> str | None:
+    configure_git_author(target_dir)
+
+    commit_hash = find_last_auto_fix_commit(target_dir)
+
+    if commit_hash is None:
+        return None
+
+    _run_git(target_dir, ["revert", "--no-edit", commit_hash])
+    push_current_branch(target_dir)
+
+    return commit_hash

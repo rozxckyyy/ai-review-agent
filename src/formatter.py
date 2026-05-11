@@ -5,6 +5,7 @@ AI_REVIEW_COMMENT_MARKER = "<!-- ai-review-agent-review-comment -->"
 AI_EXPLAIN_COMMENT_MARKER = "<!-- ai-review-agent-explain-comment -->"
 AI_FIX_COMMENT_MARKER = "<!-- ai-review-agent-fix-comment -->"
 AI_AUTO_FIX_COMMENT_MARKER = "<!-- ai-review-agent-auto-fix-comment -->"
+AI_REVERT_COMMENT_MARKER = "<!-- ai-review-agent-revert-comment -->"
 
 
 def format_review_comment(review: ReviewResult) -> str:
@@ -180,11 +181,7 @@ def format_auto_fix_comment(
         lines.append("")
 
         for item in applied:
-            lines.extend(
-                [
-                    f"- `{item.file}` — {item.title}",
-                ]
-            )
+            lines.append(f"- `{item.file}` — {item.title}")
 
         lines.append("")
 
@@ -208,5 +205,54 @@ def format_auto_fix_comment(
         lines.append("⚠️ Исправления были применены локально, но commit не был создан.")
     else:
         lines.append("Код не был изменен.")
+
+    return "\n".join(lines)
+
+
+def format_revert_comment(
+    reverted_commit: str | None,
+    error: str | None = None,
+) -> str:
+    lines: list[str] = [
+        AI_REVERT_COMMENT_MARKER,
+        "## 🤖 AI Review Agent — Revert Last Fix",
+        "",
+    ]
+
+    if error:
+        lines.extend(
+            [
+                "❌ Не удалось откатить последнее автоисправление.",
+                "",
+                "**Ошибка:**",
+                "",
+                "```",
+                error,
+                "```",
+            ]
+        )
+        return "\n".join(lines)
+
+    if reverted_commit is None:
+        lines.extend(
+            [
+                "ℹ️ Агент не нашел commit автоисправления для отката.",
+                "",
+                "Откатываются только commit'ы, созданные командой `/agent auto-fix`.",
+            ]
+        )
+        return "\n".join(lines)
+
+    short_hash = reverted_commit[:7]
+
+    lines.extend(
+        [
+            "✅ Последнее автоисправление откатано.",
+            "",
+            f"Откатан commit: `{short_hash}`",
+            "",
+            "Изменения запушены в ветку pull request.",
+        ]
+    )
 
     return "\n".join(lines)

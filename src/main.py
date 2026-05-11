@@ -7,10 +7,12 @@ from src.formatter import (
     AI_AUTO_FIX_COMMENT_MARKER,
     AI_EXPLAIN_COMMENT_MARKER,
     AI_FIX_COMMENT_MARKER,
+    AI_REVERT_COMMENT_MARKER,
     AI_REVIEW_COMMENT_MARKER,
     format_auto_fix_comment,
     format_explain_comment,
     format_fix_comment,
+    format_revert_comment,
     format_review_comment,
 )
 from src.gemini_client import (
@@ -19,7 +21,7 @@ from src.gemini_client import (
     propose_fixes,
     review_diff,
 )
-from src.git_service import commit_and_push_changes
+from src.git_service import commit_and_push_changes, revert_last_auto_fix_commit
 from src.github_client import get_pull_request_diff, upsert_pull_request_comment
 
 
@@ -64,15 +66,15 @@ def parse_args() -> argparse.Namespace:
     )
     pr_parser.add_argument(
         "--command",
-        choices=["review", "explain", "fix", "auto-fix"],
+        choices=["review", "explain", "fix", "auto-fix", "revert-last-fix"],
         default="review",
-        help="Команда агента: review, explain, fix или auto-fix.",
+        help="Команда агента: review, explain, fix, auto-fix или revert-last-fix.",
     )
     pr_parser.add_argument(
         "--target-dir",
         type=Path,
         default=None,
-        help="Путь к checkout репозитория, в котором нужно применять auto-fix.",
+        help="Путь к checkout репозитория, в котором нужно применять auto-fix или revert.",
     )
 
     return parser.parse_args()
@@ -232,6 +234,52 @@ def run_auto_fix_command(
     print("Комментарий auto-fix опубликован или обновлен в pull request.")
 
 
+def run_revert_last_fix_command(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    publish: bool,
+    target_dir: Path | None,
+) -> None:
+    if target_dir is None:
+        raise RuntimeError(
+            "Для команды revert-last-fix необходимо передать --target-dir."
+        )
+
+    if not target_dir.exists():
+        raise FileNotFoundError(f"target-dir не найден: {target_dir}")
+
+    reverted_commit: str | None = None
+    error: str | None = None
+
+    try:
+        reverted_commit = revert_last_auto_fix_commit(target_dir)
+    except Exception as exception:
+        error = str(exception)
+
+    print(f"Reverted commit: {reverted_commit}")
+    print(f"Error: {error}")
+
+    if publish:
+        comment = format_revert_comment(
+            reverted_commit=reverted_commit,
+            error=error,
+        )
+
+        upsert_pull_request_comment(
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=comment,
+            marker=AI_REVERT_COMMENT_MARKER,
+        )
+
+        print("Комментарий revert-last-fix опубликован или обновлен в pull request.")
+
+    if error:
+        raise RuntimeError(error)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -285,6 +333,16 @@ def main() -> None:
                 repo=args.repo,
                 pull_number=args.pull_number,
                 diff=diff,
+                publish=args.publish,
+                target_dir=args.target_dir,
+            )
+            return
+
+        if args.command == "revert-last-fix":
+            run_revert_last_fix_command(
+                owner=args.owner,
+                repo=args.repo,
+                pull_number=args.pull_number,
                 publish=args.publish,
                 target_dir=args.target_dir,
             )
