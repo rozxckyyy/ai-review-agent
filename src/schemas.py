@@ -81,6 +81,14 @@ class FixResult(BaseModel):
 class AutoFixPatch(BaseModel):
     title: str = Field(description="Короткий заголовок автоисправления.")
     file: str = Field(description="Файл, который нужно изменить.")
+    start_line: int = Field(
+        ge=1,
+        description="Начальная строка фрагмента, который нужно заменить. Нумерация с 1.",
+    )
+    end_line: int = Field(
+        ge=1,
+        description="Конечная строка фрагмента, который нужно заменить. Нумерация с 1.",
+    )
     original_code: str = Field(
         description="Точный фрагмент текущего кода, который нужно заменить."
     )

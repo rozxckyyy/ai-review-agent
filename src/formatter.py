@@ -244,7 +244,7 @@ def format_auto_fix_comment(
         lines.append("")
 
         for item in applied:
-            lines.append(f"- `{item.file}` — {item.title}")
+            lines.append(f"- `{item.file}` — {item.title} (`{item.method}`)")
 
         lines.append("")
 
@@ -262,7 +262,7 @@ def format_auto_fix_comment(
 
         lines.append("")
 
-    if check_results is not None:
+    if check_results is not None and (check_results or applied):
         lines.extend(_format_checks_markdown(check_results))
 
     if checks_passed is False:
