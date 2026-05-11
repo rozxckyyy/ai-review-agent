@@ -36,6 +36,7 @@ class ReviewResult(BaseModel):
         description="Список найденных замечаний."
     )
 
+
 class FindingExplanation(BaseModel):
     title: str = Field(description="Короткий заголовок объясняемой проблемы.")
     file: str = Field(description="Файл, к которому относится проблема.")
@@ -52,4 +53,26 @@ class ExplainResult(BaseModel):
     summary: str = Field(description="Краткий итог объяснения.")
     explanations: list[FindingExplanation] = Field(
         description="Подробные объяснения найденных проблем."
+    )
+
+
+class FixSuggestion(BaseModel):
+    title: str = Field(description="Короткий заголовок исправления.")
+    file: str = Field(description="Файл, в котором предлагается исправление.")
+    start_line: int = Field(description="Начальная строка проблемного участка.")
+    end_line: int = Field(description="Конечная строка проблемного участка.")
+    problem: str = Field(description="Описание проблемы, которую исправляет предложение.")
+    proposed_fix: str = Field(description="Предлагаемый исправленный код.")
+    explanation: str = Field(description="Почему это исправление подходит.")
+    confidence: float = Field(
+        ge=0,
+        le=1,
+        description="Уверенность модели в исправлении от 0 до 1.",
+    )
+
+
+class FixResult(BaseModel):
+    summary: str = Field(description="Краткий итог предложенных исправлений.")
+    fixes: list[FixSuggestion] = Field(
+        description="Список предложенных исправлений."
     )

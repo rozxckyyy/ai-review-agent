@@ -1,8 +1,9 @@
-from src.schemas import ReviewResult, ExplainResult
+from src.schemas import ExplainResult, FixResult, ReviewResult
 
 
-AI_REVIEW_COMMENT_MARKER = "<!-- ai-review-agent-comment -->"
+AI_REVIEW_COMMENT_MARKER = "<!-- ai-review-agent-review-comment -->"
 AI_EXPLAIN_COMMENT_MARKER = "<!-- ai-review-agent-explain-comment -->"
+AI_FIX_COMMENT_MARKER = "<!-- ai-review-agent-fix-comment -->"
 
 
 def format_review_comment(review: ReviewResult) -> str:
@@ -49,7 +50,6 @@ def format_review_comment(review: ReviewResult) -> str:
     return "\n".join(lines)
 
 
-
 def format_explain_comment(result: ExplainResult) -> str:
     lines: list[str] = [
         AI_EXPLAIN_COMMENT_MARKER,
@@ -94,5 +94,54 @@ def format_explain_comment(result: ExplainResult) -> str:
                     "",
                 ]
             )
+
+    return "\n".join(lines)
+
+
+def format_fix_comment(result: FixResult) -> str:
+    lines: list[str] = [
+        AI_FIX_COMMENT_MARKER,
+        "## 🤖 AI Review Agent — Fix Suggestions",
+        "",
+        f"**Summary:** {result.summary}",
+        "",
+    ]
+
+    if not result.fixes:
+        lines.append("Агент не нашел безопасных исправлений, которые можно предложить автоматически.")
+        return "\n".join(lines)
+
+    lines.append("### Suggested fixes")
+    lines.append("")
+
+    for index, fix in enumerate(result.fixes, start=1):
+        lines.extend(
+            [
+                f"#### {index}. {fix.title}",
+                "",
+                f"- **Файл:** `{fix.file}`",
+                f"- **Строки:** `{fix.start_line}-{fix.end_line}`",
+                f"- **Уверенность:** `{fix.confidence}`",
+                "",
+                f"**Проблема:** {fix.problem}",
+                "",
+                f"**Почему это исправление подходит:** {fix.explanation}",
+                "",
+                "**Предлагаемый код:**",
+                "",
+                "```",
+                fix.proposed_fix,
+                "```",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "---",
+            "",
+            "Это только предложение исправления. Агент пока не изменяет код автоматически.",
+        ]
+    )
 
     return "\n".join(lines)

@@ -1,7 +1,7 @@
 from google import genai
 
 from src.config import GEMINI_API_KEY, GEMINI_MODEL
-from src.schemas import ExplainResult, ReviewResult
+from src.schemas import ExplainResult, FixResult, ReviewResult
 
 
 REVIEW_PROMPT = """
@@ -42,30 +42,6 @@ REVIEW_PROMPT = """
 - Если проблема заключается только в том, что метод может вернуть null и это не обработано, используй категорию error_handling, а не security.
 """
 
-def review_diff(diff: str) -> ReviewResult:
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    prompt = f"""
-{REVIEW_PROMPT}
-
-Проанализируй следующий diff:
-
-<DIFF>
-{diff}
-</DIFF>
-"""
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_json_schema": ReviewResult.model_json_schema(),
-        },
-    )
-
-    return ReviewResult.model_validate_json(response.text)
-
 
 EXPLAIN_PROMPT = """
 Ты — ИИ-агент, который объясняет результаты ревью pull request'ов.
@@ -87,9 +63,63 @@ EXPLAIN_PROMPT = """
 """
 
 
-def explain_diff(diff: str) -> ExplainResult:
+FIX_PROMPT = """
+Ты — ИИ-агент, который предлагает исправления для pull request'ов.
+
+Твоя задача:
+1. Анализировать только предоставленный diff.
+2. Найти реальные проблемы в измененном коде.
+3. Предложить исправления только для тех проблем, которые можно исправить по предоставленному контексту.
+4. Не изменять бизнес-логику, если из diff не ясно, какое поведение должно быть правильным.
+5. Все текстовые поля ответа пиши на русском языке.
+6. Не придумывай файлы, классы и методы, которых нет в diff.
+7. Если исправление невозможно предложить уверенно, не добавляй его в fixes.
+
+Правила для proposed_fix:
+- proposed_fix должен содержать только исправленный фрагмент кода, без Markdown.
+- Не добавляй тройные кавычки, ```php или другие Markdown-обертки.
+- Если проблема в нескольких строках, верни исправленный фрагмент целиком.
+- Исправление должно быть минимальным и понятным.
+
+Если проблем нет или нет безопасных исправлений, верни пустой список fixes.
+"""
+
+
+def _generate_structured_response(prompt: str, schema: dict) -> str:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config={
+            "response_mime_type": "application/json",
+            "response_json_schema": schema,
+        },
+    )
+
+    return response.text
+
+
+def review_diff(diff: str) -> ReviewResult:
+    prompt = f"""
+{REVIEW_PROMPT}
+
+Проанализируй следующий diff:
+
+<DIFF>
+{diff}
+</DIFF>
+"""
+
+    response_text = _generate_structured_response(
+        prompt=prompt,
+        schema=ReviewResult.model_json_schema(),
+    )
+
+    return ReviewResult.model_validate_json(response_text)
+
+
+def explain_diff(diff: str) -> ExplainResult:
     prompt = f"""
 {EXPLAIN_PROMPT}
 
@@ -100,13 +130,28 @@ def explain_diff(diff: str) -> ExplainResult:
 </DIFF>
 """
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_json_schema": ExplainResult.model_json_schema(),
-        },
+    response_text = _generate_structured_response(
+        prompt=prompt,
+        schema=ExplainResult.model_json_schema(),
     )
 
-    return ExplainResult.model_validate_json(response.text)
+    return ExplainResult.model_validate_json(response_text)
+
+
+def propose_fixes(diff: str) -> FixResult:
+    prompt = f"""
+{FIX_PROMPT}
+
+Проанализируй следующий diff и предложи исправления:
+
+<DIFF>
+{diff}
+</DIFF>
+"""
+
+    response_text = _generate_structured_response(
+        prompt=prompt,
+        schema=FixResult.model_json_schema(),
+    )
+
+    return FixResult.model_validate_json(response_text)

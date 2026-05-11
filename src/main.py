@@ -3,11 +3,13 @@ from pathlib import Path
 
 from src.formatter import (
     AI_EXPLAIN_COMMENT_MARKER,
+    AI_FIX_COMMENT_MARKER,
     AI_REVIEW_COMMENT_MARKER,
     format_explain_comment,
+    format_fix_comment,
     format_review_comment,
 )
-from src.gemini_client import explain_diff, review_diff
+from src.gemini_client import explain_diff, propose_fixes, review_diff
 from src.github_client import get_pull_request_diff, upsert_pull_request_comment
 
 
@@ -52,9 +54,9 @@ def parse_args() -> argparse.Namespace:
     )
     pr_parser.add_argument(
         "--command",
-        choices=["review", "explain"],
+        choices=["review", "explain", "fix"],
         default="review",
-        help="Команда агента: review или explain.",
+        help="Команда агента: review, explain или fix.",
     )
 
     return parser.parse_args()
@@ -121,6 +123,33 @@ def run_explain_command(
     print("Комментарий с объяснением опубликован или обновлен в pull request.")
 
 
+def run_fix_command(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    diff: str,
+    publish: bool,
+) -> None:
+    fixes = propose_fixes(diff)
+
+    print(fixes.model_dump_json(indent=2))
+
+    if not publish:
+        return
+
+    comment = format_fix_comment(fixes)
+
+    upsert_pull_request_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=comment,
+        marker=AI_FIX_COMMENT_MARKER,
+    )
+
+    print("Комментарий с предложениями исправлений опубликован или обновлен в pull request.")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -150,6 +179,16 @@ def main() -> None:
 
         if args.command == "explain":
             run_explain_command(
+                owner=args.owner,
+                repo=args.repo,
+                pull_number=args.pull_number,
+                diff=diff,
+                publish=args.publish,
+            )
+            return
+
+        if args.command == "fix":
+            run_fix_command(
                 owner=args.owner,
                 repo=args.repo,
                 pull_number=args.pull_number,
