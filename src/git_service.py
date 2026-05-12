@@ -25,6 +25,15 @@ def _run_git(target_dir: Path, args: list[str]) -> str:
     return result.stdout.strip()
 
 
+def _run_git_allow_error(target_dir: Path, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=target_dir,
+        text=True,
+        capture_output=True,
+    )
+
+
 def configure_git_author(target_dir: Path) -> None:
     _run_git(target_dir, ["config", "user.name", AI_AGENT_AUTHOR_NAME])
     _run_git(
@@ -36,6 +45,15 @@ def configure_git_author(target_dir: Path) -> None:
 def has_git_changes(target_dir: Path) -> bool:
     status = _run_git(target_dir, ["status", "--porcelain"])
     return bool(status.strip())
+
+
+def has_staged_changes(target_dir: Path) -> bool:
+    result = _run_git_allow_error(
+        target_dir,
+        ["diff", "--cached", "--quiet"],
+    )
+
+    return result.returncode == 1
 
 
 def get_current_branch(target_dir: Path) -> str:
@@ -52,13 +70,41 @@ def push_current_branch(target_dir: Path) -> None:
     _run_git(target_dir, ["push", "origin", f"HEAD:{branch}"])
 
 
-def commit_and_push_changes(target_dir: Path, message: str) -> bool:
+def _unique_paths(file_paths: list[str]) -> list[str]:
+    result: list[str] = []
+
+    for file_path in file_paths:
+        normalized = file_path.replace("\\", "/")
+
+        if normalized not in result:
+            result.append(normalized)
+
+    return result
+
+
+def commit_and_push_changes(
+    target_dir: Path,
+    message: str,
+    file_paths: list[str] | None = None,
+) -> bool:
     configure_git_author(target_dir)
 
-    if not has_git_changes(target_dir):
+    if file_paths is None:
+        if not has_git_changes(target_dir):
+            return False
+
+        _run_git(target_dir, ["add", "."])
+    else:
+        paths = _unique_paths(file_paths)
+
+        if not paths:
+            return False
+
+        _run_git(target_dir, ["add", "--", *paths])
+
+    if not has_staged_changes(target_dir):
         return False
 
-    _run_git(target_dir, ["add", "."])
     _run_git(target_dir, ["commit", "-m", message])
     push_current_branch(target_dir)
 

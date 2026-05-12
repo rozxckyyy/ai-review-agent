@@ -301,9 +301,12 @@ def run_auto_fix_command(
             checks_passed = True
 
         if checks_passed:
+            changed_by_agent = [patch.file for patch in applied]
+
             commit_created = commit_and_push_changes(
                 target_dir=target_dir,
                 message="Apply AI auto-fix suggestions",
+                file_paths=changed_by_agent,
             )
 
     print(auto_fixes.model_dump_json(indent=2))
