@@ -1,7 +1,29 @@
 from google import genai
+from google.genai import errors as genai_errors
 
 from src.config import GEMINI_API_KEY, GEMINI_MODEL
 from src.schemas import AutoFixResult, ExplainResult, FixResult, ReviewResult
+
+
+class ModelApiError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        status_code: int | None = None,
+        status: str | None = None,
+        retry_delay: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.model = model
+        self.status_code = status_code
+        self.status = status
+        self.retry_delay = retry_delay
+
+
+class ModelQuotaExceededError(ModelApiError):
+    pass
 
 
 REVIEW_PROMPT = """
@@ -193,17 +215,93 @@ AUTO_FIX_PROMPT = """
 """
 
 
+def _extract_error_json(error: Exception) -> dict:
+    response_json = getattr(error, "response_json", None)
+
+    if isinstance(response_json, dict):
+        return response_json
+
+    return {}
+
+
+def _extract_retry_delay(error_data: dict) -> str | None:
+    details = error_data.get("error", {}).get("details", [])
+
+    if not isinstance(details, list):
+        return None
+
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+
+        type_value = item.get("@type", "")
+
+        if type_value.endswith("RetryInfo"):
+            retry_delay = item.get("retryDelay")
+
+            if retry_delay:
+                return str(retry_delay)
+
+    return None
+
+
+def _build_model_error(error: Exception) -> ModelApiError:
+    error_data = _extract_error_json(error)
+
+    status_code = getattr(error, "status_code", None)
+    status = None
+    message = str(error)
+    retry_delay = None
+
+    if error_data:
+        error_object = error_data.get("error", {})
+
+        if isinstance(error_object, dict):
+            status_code = error_object.get("code", status_code)
+            status = error_object.get("status")
+            message = error_object.get("message", message)
+            retry_delay = _extract_retry_delay(error_data)
+
+    is_quota_error = (
+        status_code == 429
+        or status == "RESOURCE_EXHAUSTED"
+        or "RESOURCE_EXHAUSTED" in str(error)
+        or "Quota exceeded" in str(error)
+        or "exceeded your current quota" in str(error).lower()
+    )
+
+    if is_quota_error:
+        return ModelQuotaExceededError(
+            message=message,
+            model=GEMINI_MODEL,
+            status_code=status_code,
+            status=status,
+            retry_delay=retry_delay,
+        )
+
+    return ModelApiError(
+        message=message,
+        model=GEMINI_MODEL,
+        status_code=status_code,
+        status=status,
+        retry_delay=retry_delay,
+    )
+
+
 def _generate_structured_response(prompt: str, schema: dict) -> str:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_json_schema": schema,
-        },
-    )
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_json_schema": schema,
+            },
+        )
+    except (genai_errors.ClientError, genai_errors.ServerError) as error:
+        raise _build_model_error(error) from error
 
     return response.text
 

@@ -1,3 +1,5 @@
+from typing import Any
+
 from src.check_runner import CheckResult
 from src.schemas import AutoFixResult, ExplainResult, FixResult, ReviewResult
 
@@ -7,6 +9,7 @@ AI_EXPLAIN_COMMENT_MARKER = "<!-- ai-review-agent-explain-comment -->"
 AI_FIX_COMMENT_MARKER = "<!-- ai-review-agent-fix-comment -->"
 AI_AUTO_FIX_COMMENT_MARKER = "<!-- ai-review-agent-auto-fix-comment -->"
 AI_REVERT_COMMENT_MARKER = "<!-- ai-review-agent-revert-comment -->"
+AI_ERROR_COMMENT_MARKER = "<!-- ai-review-agent-error-comment -->"
 
 
 def _format_checks_markdown(check_results: list[CheckResult]) -> list[str]:
@@ -320,6 +323,76 @@ def format_revert_comment(
             f"Откатан commit: `{short_hash}`",
             "",
             "Изменения запушены в ветку pull request.",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def format_model_error_comment(error: Any, command: str) -> str:
+    status_code = getattr(error, "status_code", None)
+    status = getattr(error, "status", None)
+    model = getattr(error, "model", None)
+    retry_delay = getattr(error, "retry_delay", None)
+    message = getattr(error, "message", str(error))
+
+    is_quota_error = (
+        status_code == 429
+        or status == "RESOURCE_EXHAUSTED"
+        or "RESOURCE_EXHAUSTED" in str(message)
+        or "quota" in str(message).lower()
+    )
+
+    title = "Model quota exceeded" if is_quota_error else "Model API error"
+
+    lines: list[str] = [
+        AI_ERROR_COMMENT_MARKER,
+        f"## 🤖 AI Review Agent — {title}",
+        "",
+    ]
+
+    if is_quota_error:
+        lines.extend(
+            [
+                "❌ Агент не смог выполнить команду, потому что исчерпан лимит запросов к LLM-модели.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "❌ Агент не смог выполнить команду из-за ошибки при обращении к LLM-модели.",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            f"- **Команда:** `{command}`",
+            f"- **Модель:** `{model or 'unknown'}`",
+            f"- **HTTP status:** `{status_code or 'unknown'}`",
+            f"- **API status:** `{status or 'unknown'}`",
+        ]
+    )
+
+    if retry_delay:
+        lines.append(f"- **Retry delay:** `{retry_delay}`")
+
+    lines.extend(
+        [
+            "",
+            "**Что можно сделать:**",
+            "",
+            "- Подождать сброса лимитов и повторить команду позже.",
+            "- Использовать другой API-ключ с доступной квотой.",
+            "- Временно переключиться на другую модель.",
+            "- Уменьшить количество повторных запусков агента.",
+            "",
+            "**Сообщение модели:**",
+            "",
+            "```",
+            str(message)[:3000],
+            "```",
         ]
     )
 

@@ -14,25 +14,22 @@ from src.diff_utils import (
 )
 from src.file_editor import apply_auto_fix_patches
 from src.formatter import (
-    AI_AUTO_FIX_COMMENT_MARKER,
-    AI_EXPLAIN_COMMENT_MARKER,
-    AI_FIX_COMMENT_MARKER,
-    AI_REVERT_COMMENT_MARKER,
-    AI_REVIEW_COMMENT_MARKER,
     format_auto_fix_comment,
     format_explain_comment,
     format_fix_comment,
+    format_model_error_comment,
     format_revert_comment,
     format_review_comment,
 )
 from src.gemini_client import (
+    ModelApiError,
     explain_diff,
     propose_auto_fixes,
     propose_fixes,
     review_diff,
 )
 from src.git_service import commit_and_push_changes, revert_last_auto_fix_commit
-from src.github_client import get_pull_request_diff, upsert_pull_request_comment
+from src.github_client import create_pull_request_comment, get_pull_request_diff
 from src.project_config import load_agent_config
 
 
@@ -91,6 +88,40 @@ def read_diff_from_file(diff_file: Path) -> str:
         raise FileNotFoundError(f"Файл не найден: {diff_file}")
 
     return diff_file.read_text(encoding="utf-8")
+
+
+def publish_comment(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    body: str,
+) -> None:
+    create_pull_request_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=body,
+    )
+
+
+def publish_model_error_comment(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    command: str,
+    error: ModelApiError,
+) -> None:
+    comment = format_model_error_comment(
+        error=error,
+        command=command,
+    )
+
+    publish_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=comment,
+    )
 
 
 def collect_project_checks(target_dir: Path | None):
@@ -172,15 +203,14 @@ def run_review_command(
             check_results=check_results,
         )
 
-        upsert_pull_request_comment(
+        publish_comment(
             owner=owner,
             repo=repo,
             pull_number=pull_number,
             body=comment,
-            marker=AI_REVIEW_COMMENT_MARKER,
         )
 
-        print("Комментарий ревью опубликован или обновлен в pull request.")
+        print("Комментарий ревью опубликован в pull request.")
 
     if fail_on_request_changes and review.verdict == "request_changes":
         raise SystemExit(1)
@@ -210,15 +240,14 @@ def run_explain_command(
 
     comment = format_explain_comment(explanation)
 
-    upsert_pull_request_comment(
+    publish_comment(
         owner=owner,
         repo=repo,
         pull_number=pull_number,
         body=comment,
-        marker=AI_EXPLAIN_COMMENT_MARKER,
     )
 
-    print("Комментарий с объяснением опубликован или обновлен в pull request.")
+    print("Комментарий с объяснением опубликован в pull request.")
 
 
 def run_fix_command(
@@ -245,15 +274,14 @@ def run_fix_command(
 
     comment = format_fix_comment(fixes)
 
-    upsert_pull_request_comment(
+    publish_comment(
         owner=owner,
         repo=repo,
         pull_number=pull_number,
         body=comment,
-        marker=AI_FIX_COMMENT_MARKER,
     )
 
-    print("Комментарий с предложениями исправлений опубликован или обновлен в pull request.")
+    print("Комментарий с предложениями исправлений опубликован в pull request.")
 
 
 def run_auto_fix_command(
@@ -325,15 +353,14 @@ def run_auto_fix_command(
             checks_passed=checks_passed,
         )
 
-        upsert_pull_request_comment(
+        publish_comment(
             owner=owner,
             repo=repo,
             pull_number=pull_number,
             body=comment,
-            marker=AI_AUTO_FIX_COMMENT_MARKER,
         )
 
-        print("Комментарий auto-fix опубликован или обновлен в pull request.")
+        print("Комментарий auto-fix опубликован в pull request.")
 
     if applied and checks_passed is False:
         raise SystemExit(1)
@@ -369,37 +396,27 @@ def run_revert_last_fix_command(
             error=error,
         )
 
-        upsert_pull_request_comment(
+        publish_comment(
             owner=owner,
             repo=repo,
             pull_number=pull_number,
             body=comment,
-            marker=AI_REVERT_COMMENT_MARKER,
         )
 
-        print("Комментарий revert-last-fix опубликован или обновлен в pull request.")
+        print("Комментарий revert-last-fix опубликован в pull request.")
 
     if error:
         raise RuntimeError(error)
 
 
-def main() -> None:
-    args = parse_args()
+def run_pr_command(args: argparse.Namespace) -> None:
+    diff = get_pull_request_diff(
+        owner=args.owner,
+        repo=args.repo,
+        pull_number=args.pull_number,
+    )
 
-    if args.mode == "file":
-        diff = read_diff_from_file(args.diff_file)
-        review = review_diff(diff)
-
-        print(review.model_dump_json(indent=2))
-        return
-
-    if args.mode == "pr":
-        diff = get_pull_request_diff(
-            owner=args.owner,
-            repo=args.repo,
-            pull_number=args.pull_number,
-        )
-
+    try:
         if args.command == "review":
             run_review_command(
                 owner=args.owner,
@@ -456,6 +473,35 @@ def main() -> None:
             return
 
         raise RuntimeError(f"Неизвестная команда агента: {args.command}")
+
+    except ModelApiError as error:
+        print(f"Model API error: {error}")
+
+        if args.publish:
+            publish_model_error_comment(
+                owner=args.owner,
+                repo=args.repo,
+                pull_number=args.pull_number,
+                command=args.command,
+                error=error,
+            )
+
+        raise SystemExit(1)
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.mode == "file":
+        diff = read_diff_from_file(args.diff_file)
+        review = review_diff(diff)
+
+        print(review.model_dump_json(indent=2))
+        return
+
+    if args.mode == "pr":
+        run_pr_command(args)
+        return
 
     raise RuntimeError(f"Неизвестный режим запуска: {args.mode}")
 
