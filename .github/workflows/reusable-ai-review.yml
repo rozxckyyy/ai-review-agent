@@ -25,7 +25,7 @@ on:
         description: "Git ref of AI review agent repository"
         required: false
         type: string
-        default: "main"
+        default: "master"
 
       target_setup_command:
         description: "Command for installing target project dependencies"
